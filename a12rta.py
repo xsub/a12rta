@@ -3,16 +3,21 @@
 # Script tails logs on N-boxes (ssh)
 # (c)2023 Pawel.Suchanecki@gmail.com
 
+import argparse
 import asyncio
 import datetime
 import time
-from fabric import Connection
 from asyncio.queues import Queue
+from fabric import Connection
 import yaml
 
 
 async def producer(queue: Queue, host: dict):
-    conn = Connection(host['host'], user=host['user'], connect_kwargs={'key_filename': host['key_filename']})
+    conn = Connection(
+        host['host'],
+        user=host['user'],
+        connect_kwargs={'key_filename': host['key_filename']}
+    )
     with conn.cd('/tmp'):
         tail_cmd = f"sudo tail -n {host['buffer_lines']} {host['log_file']}"
         old_data = ()
@@ -39,17 +44,26 @@ async def consumer(queue: Queue):
         queue.task_done()
 
 
-async def main():
-    with open('hosts.yml') as f:
+async def main(filename: str):
+    with open(filename) as f:
         hosts = yaml.safe_load(f)
-        queue = asyncio.Queue()
-        producers = [asyncio.create_task(producer(queue, host)) for host in hosts]
-        consumer_task = asyncio.create_task(consumer(queue))
-        await asyncio.gather(*producers)
-        await queue.join()
-        consumer_task.cancel()
+    queue = asyncio.Queue()
+    producers = [asyncio.create_task(producer(queue, host)) for host in hosts]
+    consumer_task = asyncio.create_task(consumer(queue))
+    await asyncio.gather(*producers)
+    await queue.join()
+    consumer_task.cancel()
 
 
 if __name__ == '__main__':
-    asyncio.run(main())
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        '--filename',
+        type=str,
+        default='hosts.yml',
+        help='The YAML file that contains the host information'
+    )
+    args = parser.parse_args()
+
+    asyncio.run(main(args.filename))
 
