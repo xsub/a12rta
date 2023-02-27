@@ -1,8 +1,8 @@
-# a12rta
-A simple Python (asyncio+fabric, producer-consumer pattern based) log monitor for arbitrary number of remote machines.
+# a12rta - another one to rule them all
+#### A simple Python (asyncio+fabric, producer-consumer pattern based) log monitor for arbitrary number of remote machines.
+----
 
-
-## TODOs:
+### TODOs:
 1. Extend number of monitored log files to arbitrary number per host
 2. Add support for localhost (non-ssh)
 3. Use default values if not defined/overridden for host
