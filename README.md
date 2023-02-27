@@ -3,6 +3,7 @@
 ----
 
 ### TODOs:
+0. Handle Exceptions like "Host is down" & shorter timeouts for ssh
 1. Extend number of monitored log files to arbitrary number per host
 2. Add support for localhost (non-ssh)
 3. Use default values if not defined/overridden for host
