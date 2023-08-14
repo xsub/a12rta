@@ -16,13 +16,22 @@ async def producer(queue: Queue, host: dict):
     conn = Connection(
         host['host'],
         user=host['user'],
-        connect_kwargs={'key_filename': host['key_filename']}
+        connect_kwargs={'key_filename': host['key_filename'], 'timeout': 10}
     )
     with conn.cd('/tmp'):
+        print(f"Connection to host {host['host']}, monitoring {host['log_file']}")  # Add this line
         tail_cmd = f"sudo tail -n {host['buffer_lines']} {host['log_file']}"
         old_data = ()
         while True:
-            channel = conn.run(command=tail_cmd, hide='both')
+            try:
+                channel = conn.run(command=tail_cmd, hide='both')
+            except TimeoutError:
+                print(f"ERROR: Connection to {host['host']} timed out.")
+                return
+            except Exception as e:
+                print(f"ERROR: Error executing command on host {host['host']}: {e}")
+                return
+
             data = channel.stdout.splitlines()
             if old_data != data:
                 old_d = set(old_data)
@@ -62,7 +71,7 @@ if __name__ == '__main__':
         '--filename',
         type=str,
         default='hosts.yml',
-        help='The YAML file that contains the host information'
+        help='The YAML file that contains the host configuration.'
     )
     args = parser.parse_args()
 
