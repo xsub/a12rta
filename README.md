@@ -2,39 +2,7 @@
 #### A simple Python (asyncio+fabric, producer-consumer pattern based) log monitor for arbitrary number of remote machines.
 ----
 
-### TODOs:
-0. Handle Exceptions like "Host is down" ~~& shorter timeouts for ssh~~
-1. Extend number of monitored log files to arbitrary number per host
-2. Add support for localhost (non-ssh)
-3. Use default values if not defined/overridden for host
-4. ~~Move host configs to .yaml~~
-5. Add options for different sorting of message output
-6. Add (critical) regex based error message filters triggering actions
-7. Find how to be able to use `tail -f`, maybe extend Paramiko/Fabric
-8. Serve it as a page from secure host with mini web server (w SSL)
-9. How to change password less sudo to more strict sudoers.d policy
-10. ~~Update the license to be permissive.~~
-
-
-Example config file:
-
-```yaml
-- host: purplemanul.ANONYMIZED.TLD
-  user: ANONYMIZED_USER
-  key_filename: /Users/ANONYMIZED_USER/.ssh/id_rsa
-  log_file: /var/log/nginx/access.log-20230622
-  delay: 5
-  buffer_lines: 10
-
-- host: refurby
-  user: ANONYMIZED_USER
-  key_filename: /Users/ANONYMIZED_USER/.ssh/id_rsa
-  log_file: /var/log/syslog
-  delay: 60
-  buffer_lines: 5
-```
-
-Example run:
+### Example run:
 
 ```shell 
 ➜  a12rta git:(main) ✗ python3.10 a12rta.py                                     
@@ -60,5 +28,34 @@ ANONYMIZED_IP - - [14/Aug/2023:22:30:25 +0000] "GET /assets/img/search.83621669.
 -----
 ```
 
+### Example config file:
 
+```yaml
+- host: purplemanul.ANONYMIZED.TLD
+  user: ANONYMIZED_USER
+  key_filename: /Users/ANONYMIZED_USER/.ssh/id_rsa
+  log_file: /var/log/nginx/access.log-20230622
+  delay: 5
+  buffer_lines: 10
 
+- host: refurby
+  user: ANONYMIZED_USER
+  key_filename: /Users/ANONYMIZED_USER/.ssh/id_rsa
+  log_file: /var/log/syslog
+  delay: 60
+  buffer_lines: 5
+```
+
+### TODOs:
+
+0. Handle Exceptions like "Host is down" ~~& shorter timeouts for ssh~~
+1. Extend number of monitored log files to arbitrary number per host
+2. Add support for localhost (non-ssh)
+3. Use default values if not defined/overridden for host
+4. ~~Move host configs to .yaml~~
+5. Add options for different sorting of message output
+6. Add (critical) regex based error message filters triggering actions
+7. Find how to be able to use `tail -f`, maybe extend Paramiko/Fabric
+8. Serve it as a page from secure host with mini web server (w SSL)
+9. How to change password less sudo to more strict sudoers.d policy
+10. ~~Update the license to be permissive.~~
