@@ -1,5 +1,5 @@
 # a12rta - Another One to Rule Them All
-#### An asynchronous, Python-based log monitoring tool for multiple remote machines, utilizing asyncio, fabric, and the producer-consumer pattern.
+#### An asynchronous log monitoring tool for multiple remote machines, utilizing asyncio, fabric, and the producer-consumer pattern (Python).
 ----
 
 ### Example run:
