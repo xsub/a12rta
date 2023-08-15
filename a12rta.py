@@ -6,16 +6,26 @@
 import argparse
 import asyncio
 import datetime
+import logging
 import time
 import os
-import logging
-from asyncio.queues import Queue
-from fabric import Connection
+import signal
 import yaml
+from asyncio.queues import Queue
+from asyncio.exceptions import CancelledError
+from fabric import Connection
 from functools import wraps
+
 
 # Initialize the logger
 logging.basicConfig(filename='a12rta.log', level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+
+# Create a signal handler
+def sigint_handler(main_task):
+    msg = "Ctrl+C received. Shutting down."
+    logging.error(msg)
+    print("\n"+msg)
+    main_task.cancel()
 
 def handle_run_errors(func):
     @wraps(func)
@@ -80,12 +90,15 @@ async def producer(queue: Queue, host: dict):
     conn.close()
 
 async def consumer(queue: Queue):
-    while True:
-        line = await queue.get()
-        host, log_file, data = line
-        dt = datetime.datetime.fromtimestamp(time.time())
-        print(f"@{dt} {host}:{log_file}:\n{data}\n-----", end='\n', flush=True)
-        queue.task_done()
+    try:
+        while True:
+            line = await queue.get()
+            host, log_file, data = line
+            dt = datetime.datetime.fromtimestamp(time.time())
+            print(f"@{dt} {host}:{log_file}:\n{data}\n-----", end='\n', flush=True)
+            queue.task_done()
+    except CancelledError:
+        pass
 
 async def main(filename: str):
     with open(filename) as f:
@@ -93,9 +106,13 @@ async def main(filename: str):
     queue = asyncio.Queue()
     producers = [asyncio.create_task(producer(queue, host)) for host in hosts]
     consumer_task = asyncio.create_task(consumer(queue))
-    await asyncio.gather(*producers)
-    await queue.join()
-    consumer_task.cancel()
+    try:
+        await asyncio.gather(*producers)
+    except CancelledError:
+        print("Main coroutine cancelled. Stopping the event loop.")
+    finally:
+        consumer_task.cancel()
+
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
@@ -108,4 +125,12 @@ if __name__ == '__main__':
     )
     args = parser.parse_args()
 
-    asyncio.run(main(args.filename))
+    loop = asyncio.get_event_loop()
+    main_task = loop.create_task(main(args.filename))
+    loop.add_signal_handler(signal.SIGINT, lambda: sigint_handler(main_task))
+    try:
+        loop.run_until_complete(main_task)
+    except asyncio.CancelledError:
+        print("Main task cancelled.")
+    finally:
+        loop.close()
