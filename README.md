@@ -1,5 +1,5 @@
 # a12rta - Another One to Rule Them All
-#### An asynchronous log monitoring tool for multiple remote machines, utilizing asyncio, fabric, and the producer-consumer pattern (Python).
+#### An asynchronous log monitoring tool for multiple remote machines, utilizing asyncio, fabric, and the producer-consumer pattern.
 ----
 
 ### Example run:
@@ -45,7 +45,7 @@ ANONYMIZED_IP - - [15/Aug/2023:22:47:36 +0000] "GET / HTTP/1.1" 404 146 "-" "Use
 
 ```yaml
 - host: Host_A
-  user: ANONYMIZED_USER_A
+  user: almalinux
   key_filename: /Users/pawelsuchanecki/.ssh/id_rsa
   login_timeout: 5
   log_file: /var/log/nginx/access.log-20230622
@@ -54,7 +54,7 @@ ANONYMIZED_IP - - [15/Aug/2023:22:47:36 +0000] "GET / HTTP/1.1" 404 146 "-" "Use
   root_access_type: sudo
 
 - host: Host_B
-  user: ANONYMIZED_USER_B
+  user: pablo
   key_filename: /Users/pawelsuchanecki/.ssh/id_rsa
   login_timeout: 3 
   log_file: /var/log/syslog
