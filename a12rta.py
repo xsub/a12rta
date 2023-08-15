@@ -16,11 +16,15 @@ async def producer(queue: Queue, host: dict):
     conn = Connection(
         host['host'],
         user=host['user'],
-        connect_kwargs={'key_filename': host['key_filename'], 'timeout': 10}
+        connect_kwargs={'key_filename': host['key_filename'], 'timeout': host['login_timeout']}
     )
     with conn.cd('/tmp'):
         print(f"Connection to host {host['host']}, monitoring {host['log_file']}")  # Add this line
-        tail_cmd = f"sudo tail -n {host['buffer_lines']} {host['log_file']}"
+        root_cmd = host.get('root_access_type', 'sudo')
+        if root_cmd not in ['sudo', 'doas']:
+            print(f"ERROR: Invalid root_access_type {root_cmd} for host {host['host']}. Supported values are 'sudo' or 'doas'.")
+            return
+        tail_cmd = f"{root_cmd} tail -n {host['buffer_lines']} {host['log_file']}"
         old_data = ()
         while True:
             try:
