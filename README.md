@@ -1,6 +1,7 @@
 # a12rta - Another One to Rule Them All
-#### An asynchronous log monitoring tool for multiple remote machines, utilizing asyncio, fabric, and the producer-consumer pattern.
-----
+#### An asynchronous, Python-based log monitoring tool for multiple remote machines, utilizing asyncio, fabric, and the producer-consumer pattern. 
+
+##### 🔥 Now features graceful shutdown on SIGINT (Ctrl+C)! :accessibility: 😸
 
 ### Example run:
 
@@ -39,6 +40,8 @@ ANONYMIZED_IP - - [15/Aug/2023:22:29:42 +0000] "\x03\x00\x00\x13\x0E\xE0\x00\x00
 @2023-08-16 00:52:08.891593 Host_A:/var/log/nginx/access.log-20230622:
 ANONYMIZED_IP - - [15/Aug/2023:22:47:36 +0000] "GET / HTTP/1.1" 404 146 "-" "UserAgentFinal3" "-"
 -----
+Ctrl+C received. Shutting down.
+Main coroutine cancelled. Stopping the event loop.
 ```
 
 ### Example config file:
