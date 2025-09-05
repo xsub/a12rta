@@ -130,7 +130,8 @@ if __name__ == '__main__':
     )
     args = parser.parse_args()
 
-    loop = asyncio.get_event_loop()
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
     main_task = loop.create_task(main(args.filename))
     loop.add_signal_handler(signal.SIGINT, lambda: sigint_handler(main_task))
     try:
