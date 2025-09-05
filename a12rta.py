@@ -74,7 +74,7 @@ async def producer(queue: Queue, host: dict):
         msg=f"Connected to {host['host']}."
         logging.info(msg)
         print(msg) 
-        tail_cmd = f"{host['root_access_type']} tail -n {host['buffer_lines']} -F {host['log_file']}"
+        tail_cmd = f"{host['root_access_type']} tail -n {host['buffer_lines']} {host['log_file']}"
         transport = conn.client.get_transport()
         while True:
             channel = transport.open_session()
