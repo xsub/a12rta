@@ -74,19 +74,24 @@ async def producer(queue: Queue, host: dict):
         msg=f"Connected to {host['host']}."
         logging.info(msg)
         print(msg) 
-        tail_cmd = f"{host['root_access_type']} tail -n {host['buffer_lines']} {host['log_file']}"
-        old_data = ()
+        tail_cmd = f"{host['root_access_type']} tail -n {host['buffer_lines']} -F {host['log_file']}"
+        transport = conn.client.get_transport()
         while True:
-            channel = conn.run(command=tail_cmd, hide='both')
-            data = channel.stdout.splitlines()
-            if old_data != data:
-                old_d = set(old_data)
-                delta_data = [x for x in data if x not in old_d]
-                for d in delta_data:
-                    await queue.put((host['host'], host['log_file'], str(d)))
-            old_data = data.copy()
-            data.clear()
-            await asyncio.sleep(host['delay'])
+            channel = transport.open_session()
+            channel.get_pty()
+            channel.exec_command(tail_cmd)
+            file_obj = channel.makefile('r')
+            try:
+                while True:
+                    line = await asyncio.to_thread(file_obj.readline)
+                    if not line:
+                        break
+                    await queue.put((host['host'], host['log_file'], line.rstrip()))
+            except CancelledError:
+                channel.close()
+                raise
+            channel.close()
+            await asyncio.sleep(1)
     conn.close()
 
 async def consumer(queue: Queue):
@@ -125,7 +130,8 @@ if __name__ == '__main__':
     )
     args = parser.parse_args()
 
-    loop = asyncio.get_event_loop()
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
     main_task = loop.create_task(main(args.filename))
     loop.add_signal_handler(signal.SIGINT, lambda: sigint_handler(main_task))
     try:
