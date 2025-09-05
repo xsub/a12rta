@@ -11,11 +11,11 @@ import time
 import os
 import signal
 import yaml
+from collections import deque
 from asyncio.queues import Queue
 from asyncio.exceptions import CancelledError
 from fabric import Connection
 from functools import wraps
-
 
 # Initialize the logger
 logging.basicConfig(filename='a12rta.log', level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -24,7 +24,7 @@ logging.basicConfig(filename='a12rta.log', level=logging.INFO, format='%(asctime
 def sigint_handler(main_task):
     msg = "Ctrl+C received. Shutting down."
     logging.error(msg)
-    print("\n"+msg)
+    print("\n" + msg)
     main_task.cancel()
 
 def handle_run_errors(func):
@@ -32,7 +32,10 @@ def handle_run_errors(func):
     async def wrapper(queue: Queue, host: dict):
         try:
             return await func(queue, host)
-        except TimeoutError as e:
+        except CancelledError:
+            # Let cancellations propagate cleanly
+            raise
+        except TimeoutError:
             msg = f"ERROR: Connection to {host['host']} timed out after {host['login_timeout']} seconds."
             logging.error(msg)
             print(msg)
@@ -61,46 +64,68 @@ async def producer(queue: Queue, host: dict):
 
     logging.info(f"Making connection to host {host['host']}, monitoring {host['log_file']}")
 
+    # Test the connection
     try:
-        # Test the connection by running a simple command
         conn.run('echo "test"', hide='both')
     except Exception as e:
-        msg=f"Failed to connect to {host['host']}: {e}"
+        msg = f"Failed to connect to {host['host']}: {e}"
         logging.error(msg)
         print(msg)
         return
 
     with conn.cd('/tmp'):
-        msg=f"Connected to {host['host']}."
+        msg = f"Connected to {host['host']}."
         logging.info(msg)
-        print(msg) 
+        print(msg)
         tail_cmd = f"{host['root_access_type']} tail -n {host['buffer_lines']} {host['log_file']}"
         transport = conn.client.get_transport()
-        while True:
-            channel = transport.open_session()
-            channel.get_pty()
-            channel.exec_command(tail_cmd)
-            file_obj = channel.makefile('r')
-            try:
-                while True:
-                    line = await asyncio.to_thread(file_obj.readline)
-                    if not line:
-                        break
-                    await queue.put((host['host'], host['log_file'], line.rstrip()))
-            except CancelledError:
-                channel.close()
-                raise
-            channel.close()
-            await asyncio.sleep(1)
-    conn.close()
+
+        # Fix A: bounded dedupe
+        seen = deque(maxlen=host['buffer_lines'])
+        seen_set: set[str] = set()
+
+        try:
+            while True:
+                channel = transport.open_session()
+                channel.get_pty()
+                channel.exec_command(tail_cmd)
+                file_obj = channel.makefile('r')
+                try:
+                    while True:
+                        line = await asyncio.to_thread(file_obj.readline)
+                        if not line:
+                            break
+                        line = line.rstrip('\r\n')
+
+                        if line not in seen_set:
+                            # Put a single tuple on the queue
+                            await queue.put((host['host'], host['log_file'], line))
+
+                            # Maintain bounded memory
+                            if len(seen) == seen.maxlen:
+                                removed = seen.popleft()
+                                seen_set.discard(removed)
+                            seen.append(line)
+                            seen_set.add(line)
+                except CancelledError:
+                    channel.close()
+                    raise
+                finally:
+                    channel.close()
+
+                # Poll interval before fetching a new batch of last N lines
+                await asyncio.sleep(1)
+        finally:
+            conn.close()
 
 async def consumer(queue: Queue):
     try:
         while True:
-            line = await queue.get()
-            host, log_file, data = line
+            item = await queue.get()
+            host, log_file, data = item
             dt = datetime.datetime.fromtimestamp(time.time())
-            print(f"@{dt} {host}:{log_file}:\n{data}\n-----", end='\n', flush=True)
+            # Compact timestamp, consistent output
+            print(f"@{dt:%Y-%m-%d %H:%M:%S} {host}:{log_file}:\n{data}\n-----", flush=True)
             queue.task_done()
     except CancelledError:
         pass
@@ -108,18 +133,24 @@ async def consumer(queue: Queue):
 async def main(filename: str):
     with open(filename) as f:
         hosts = yaml.safe_load(f)
-    queue = asyncio.Queue()
+
+    queue: Queue = asyncio.Queue()
     producers = [asyncio.create_task(producer(queue, host)) for host in hosts]
     consumer_task = asyncio.create_task(consumer(queue))
+
     try:
         await asyncio.gather(*producers)
     except CancelledError:
         print("Main coroutine cancelled. Stopping the event loop.")
     finally:
         consumer_task.cancel()
-
+        # Ensure consumer finishes cleanly
+        with contextlib.suppress(CancelledError, Exception):
+            await consumer_task
 
 if __name__ == '__main__':
+    import contextlib
+
     parser = argparse.ArgumentParser()
     parser.add_argument(
         '-f',
@@ -133,10 +164,16 @@ if __name__ == '__main__':
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
     main_task = loop.create_task(main(args.filename))
-    loop.add_signal_handler(signal.SIGINT, lambda: sigint_handler(main_task))
+    # SIGINT (Ctrl+C) graceful shutdown
+    try:
+        loop.add_signal_handler(signal.SIGINT, lambda: sigint_handler(main_task))
+    except NotImplementedError:
+        # add_signal_handler may be unavailable on some platforms; ignore.
+        pass
+
     try:
         loop.run_until_complete(main_task)
-    except asyncio.CancelledError:
+    except CancelledError:
         print("Main task cancelled.")
     finally:
         loop.close()
