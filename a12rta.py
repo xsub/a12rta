@@ -1,136 +1,220 @@
 #!/usr/bin/env python3
-# A12RTA: AnotherOne 2 Rule Them All
-# Script tails logs on N-boxes (ssh)
-# (c)2023 Pawel.Suchanecki@gmail.com
+# A12RTA v2: AnotherOne 2 Rule Them All (Refactored)
+# Asynchroniczny monitor logów z auto-reconnectem, strumieniowaniem i multiplexingiem.
 
 import argparse
 import asyncio
+import asyncssh
 import datetime
 import logging
-import time
-import os
 import signal
 import yaml
-from asyncio.queues import Queue
-from asyncio.exceptions import CancelledError
-from fabric import Connection
-from functools import wraps
+import re
+from pydantic import BaseModel, ValidationError, field_validator
+from typing import List, Optional
 
-
-# Initialize the logger
 logging.basicConfig(filename='a12rta.log', level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
-# Create a signal handler
-def sigint_handler(main_task):
-    msg = "Ctrl+C received. Shutting down."
-    logging.error(msg)
-    print("\n"+msg)
-    main_task.cancel()
+class HostConfig(BaseModel):
+    host: str
+    user: Optional[str] = None
+    is_localhost: bool = False
+    key_filename: Optional[str] = None
+    log_files: List[str]
+    buffer_lines: int = 10
+    root_access_type: str = "sudo"
+    filters: Optional[List[str]] = None
 
-def handle_run_errors(func):
-    @wraps(func)
-    async def wrapper(queue: Queue, host: dict):
-        try:
-            return await func(queue, host)
-        except TimeoutError as e:
-            msg = f"ERROR: Connection to {host['host']} timed out after {host['login_timeout']} seconds."
-            logging.error(msg)
-            print(msg)
-        except Exception as e:
-            if hasattr(e, 'result'):
-                msg = f"ERROR: Error executing command on host {host['host']}: Encountered a bad command exit code!"
-                logging.error(msg)
-                logging.error(f"Command: '{e.result.command}'")
-                logging.error(f"Exit code: {e.result.exited}")
-                logging.error(f"Stdout: {e.result.stdout}")
-                logging.error(f"Stderr: {e.result.stderr}")
-                print(msg)
-            else:
-                msg = f"ERROR: {e}"
-                logging.error(msg)
-                print(msg)
-    return wrapper
+    @field_validator('log_files', mode='before')
+    @classmethod
+    def parse_log_files(cls, v):
+        return [v] if isinstance(v, str) else v
 
-@handle_run_errors
-async def producer(queue: Queue, host: dict):
-    conn = Connection(
-        host['host'],
-        user=host['user'],
-        connect_kwargs={'key_filename': host['key_filename'], 'timeout': host['login_timeout']}
-    )
-
-    logging.info(f"Making connection to host {host['host']}, monitoring {host['log_file']}")
+async def tail_file(host_config: HostConfig, log_file: str, conn: asyncssh.SSHClientConnection, queue: asyncio.Queue):
+    cmd = f"{host_config.root_access_type} tail -n {host_config.buffer_lines} -F {log_file}"
+    logging.info(f"[{host_config.host}] Rozpoczynam nasłuch {log_file}")
+    
+    regexes = [re.compile(f) for f in host_config.filters] if host_config.filters else []
 
     try:
-        # Test the connection by running a simple command
-        conn.run('echo "test"', hide='both')
+        async with conn.create_process(cmd) as process:
+            async for line in process.stdout:
+                line = line.strip()
+                if not line:
+                    continue
+                
+                if regexes and not any(r.search(line) for r in regexes):
+                    continue
+
+                await queue.put((host_config.host, log_file, line))
+
+    except asyncssh.Error as e:
+        logging.error(f"[{host_config.host}] Błąd SSH odczytu {log_file}: {e}")
     except Exception as e:
-        msg=f"Failed to connect to {host['host']}: {e}"
-        logging.error(msg)
-        print(msg)
-        return
+        logging.error(f"[{host_config.host}] Nieoczekiwany błąd odczytu {log_file}: {e}")
 
-    with conn.cd('/tmp'):
-        msg=f"Connected to {host['host']}."
-        logging.info(msg)
-        print(msg) 
-        tail_cmd = f"{host['root_access_type']} tail -n {host['buffer_lines']} {host['log_file']}"
-        old_data = ()
-        while True:
-            channel = conn.run(command=tail_cmd, hide='both')
-            data = channel.stdout.splitlines()
-            if old_data != data:
-                old_d = set(old_data)
-                delta_data = [x for x in data if x not in old_d]
-                for d in delta_data:
-                    await queue.put((host['host'], host['log_file'], str(d)))
-            old_data = data.copy()
-            data.clear()
-            await asyncio.sleep(host['delay'])
-    conn.close()
 
-async def consumer(queue: Queue):
+async def tail_local_file(host_config: HostConfig, log_file: str, queue: asyncio.Queue):
+    cmd = f"{host_config.root_access_type} tail -n {host_config.buffer_lines} -F {log_file}"
+    logging.info(f"[{host_config.host}] Rozpoczynam nasłuch lokalny {log_file}")
+    
+    regexes = [re.compile(f) for f in host_config.filters] if host_config.filters else []
+
+    while True:
+        try:
+            process = await asyncio.create_subprocess_shell(
+                cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE
+            )
+            
+            async for line in process.stdout:
+                line = line.decode('utf-8', errors='replace').strip()
+                if not line:
+                    continue
+                
+                if regexes and not any(r.search(line) for r in regexes):
+                    continue
+
+                await queue.put((host_config.host, log_file, line))
+                
+        except asyncio.CancelledError:
+            if 'process' in locals():
+                try:
+                    process.terminate()
+                except:
+                    pass
+            break
+        except Exception as e:
+            logging.error(f"[{host_config.host}] Błąd lokalnego odczytu {log_file}: {e}")
+            await asyncio.sleep(5)
+
+async def local_worker(host_config: HostConfig, queue: asyncio.Queue):
+    msg = f"Inicjalizacja nasłuchu na localhost ({host_config.host})."
+    logging.info(msg)
+    print(msg)
+    
+    tasks = [
+        asyncio.create_task(tail_local_file(host_config, log, queue))
+        for log in host_config.log_files
+    ]
+    
+    try:
+        await asyncio.gather(*tasks)
+    except asyncio.CancelledError:
+        for t in tasks:
+            t.cancel()
+
+async def host_worker(host_config: HostConfig, queue: asyncio.Queue):
+    while True:
+        try:
+            connect_kwargs = {
+                "host": host_config.host,
+                "username": host_config.user,
+                "known_hosts": None,
+            }
+            if host_config.key_filename:
+                connect_kwargs["client_keys"] = [host_config.key_filename]
+
+            logging.info(f"[{host_config.host}] Łączenie...")
+            
+            async with asyncssh.connect(**connect_kwargs) as conn:
+                msg = f"Połączono pomyślnie z {host_config.host}."
+                logging.info(msg)
+                print(msg)
+                
+                tasks = [
+                    asyncio.create_task(tail_file(host_config, log, conn, queue))
+                    for log in host_config.log_files
+                ]
+                
+                await asyncio.gather(*tasks)
+                
+        except asyncssh.Error as e:
+            msg = f"[{host_config.host}] Błąd połączenia/rozłączenie: {e}. Ponawiam za 10s..."
+            logging.error(msg)
+            print(f"BŁĄD: {msg}")
+        except asyncio.CancelledError:
+            break
+        except Exception as e:
+            logging.error(f"[{host_config.host}] Błąd: {e}")
+        
+        await asyncio.sleep(10)
+
+async def consumer(queue: asyncio.Queue):
     try:
         while True:
-            line = await queue.get()
-            host, log_file, data = line
-            dt = datetime.datetime.fromtimestamp(time.time())
-            print(f"@{dt} {host}:{log_file}:\n{data}\n-----", end='\n', flush=True)
+            host, log_file, data = await queue.get()
+            dt = datetime.datetime.now()
+            print(f"@{dt:%Y-%m-%d %H:%M:%S} {host}:{log_file}:\n{data}\n-----", flush=True)
             queue.task_done()
-    except CancelledError:
+    except asyncio.CancelledError:
         pass
 
 async def main(filename: str):
-    with open(filename) as f:
-        hosts = yaml.safe_load(f)
-    queue = asyncio.Queue()
-    producers = [asyncio.create_task(producer(queue, host)) for host in hosts]
-    consumer_task = asyncio.create_task(consumer(queue))
     try:
-        await asyncio.gather(*producers)
-    except CancelledError:
-        print("Main coroutine cancelled. Stopping the event loop.")
-    finally:
-        consumer_task.cancel()
+        with open(filename) as f:
+            raw_config = yaml.safe_load(f)
+    except FileNotFoundError:
+        print(f"Brak pliku konfiguracyjnego {filename}")
+        return
 
+    hosts = []
+    for idx, item in enumerate(raw_config):
+        if 'log_file' in item and 'log_files' not in item:
+            item['log_files'] = [item.pop('log_file')]
+        
+        try:
+            hosts.append(HostConfig(**item))
+        except ValidationError as e:
+            print(f"Błąd konfiguracji dla hosta #{idx}:\n{e}")
+            continue
+
+    if not hosts:
+        print("Brak poprawnej konfiguracji hostów. Kończenie pracy.")
+        return
+
+    queue = asyncio.Queue()
+    consumer_task = asyncio.create_task(consumer(queue))
+    workers = []
+    for host in hosts:
+        if getattr(host, 'is_localhost', False) or host.host in ('localhost', '127.0.0.1'):
+            workers.append(asyncio.create_task(local_worker(host, queue)))
+        else:
+            workers.append(asyncio.create_task(host_worker(host, queue)))
+
+    try:
+        await asyncio.gather(*workers)
+    except asyncio.CancelledError:
+        print("\nPrzerwano pętlę główną. Oczekiwanie na czyste zamknięcie...")
+    finally:
+        for w in workers:
+            w.cancel()
+        consumer_task.cancel()
+        await asyncio.gather(*workers, consumer_task, return_exceptions=True)
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument(
-        '-f',
-        '--filename',
-        type=str,
-        default='hosts.yml',
-        help='The YAML file that contains the host configuration.'
-    )
+    parser.add_argument('-f', '--filename', type=str, default='hosts.yml', help='Plik YAML z konfiguracją.')
     args = parser.parse_args()
 
-    loop = asyncio.get_event_loop()
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
     main_task = loop.create_task(main(args.filename))
-    loop.add_signal_handler(signal.SIGINT, lambda: sigint_handler(main_task))
+    
+    def shutdown_handler():
+        print("Otrzymano sygnał zamknięcia (Ctrl+C). Wyłączanie...")
+        main_task.cancel()
+
+    for sig in (signal.SIGINT, signal.SIGTERM):
+        try:
+            loop.add_signal_handler(sig, shutdown_handler)
+        except NotImplementedError:
+            pass
+
     try:
         loop.run_until_complete(main_task)
     except asyncio.CancelledError:
-        print("Main task cancelled.")
+        print("Pomyślnie zamknięto.")
     finally:
         loop.close()

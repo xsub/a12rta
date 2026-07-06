@@ -77,14 +77,14 @@ Main coroutine cancelled. Stopping the event loop.
 
 ### TODOs:
 
-0. Handle Exceptions like "Host is down" ~~& shorter timeouts for ssh~~
-1. Extend number of monitored log files to arbitrary number per host
-2. Add support for localhost (non-ssh)
-3. Use default values if not defined/overridden for host
+0. ~~Handle Exceptions like "Host is down" & shorter timeouts for ssh~~ (Dodano auto-reconnect)
+1. ~~Extend number of monitored log files to arbitrary number per host~~ (Wdrożono multiplexing przez listę w konfiguracji)
+2. ~~Add support for localhost (non-ssh)~~ (Zrobione: dodano strumieniowanie podprocesami dla `localhost` i flagę `is_localhost`)
+3. ~~Use default values if not defined/overridden for host~~ (Wdrożono używając modeli Pydantic)
 4. ~~Move host configs to .yaml~~
 5. Add options for different sorting of message output
-6. Add (critical) regex based error message filters triggering actions
-7. Find how to be able to use `tail -f`, maybe extend Paramiko/Fabric
+6. ~~Add (critical) regex based error message filters triggering actions~~ (Wdrożono filtrowanie lokalne/klienckie po regexach)
+7. ~~Find how to be able to use `tail -f`, maybe extend Paramiko/Fabric~~ (Zmigrowano do `asyncssh` i ciągłego strumieniowania `tail -F`)
 8. Serve it as a page from secure host with mini web server (w SSL)
 9. How to change password less sudo to more strict sudoers.d policy
 10. ~~Update the license to be permissive.~~
