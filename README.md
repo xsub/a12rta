@@ -82,7 +82,7 @@ Main coroutine cancelled. Stopping the event loop.
 2. ~~Add support for localhost (non-ssh)~~ (Zrobione: dodano strumieniowanie podprocesami dla `localhost` i flagę `is_localhost`)
 3. ~~Use default values if not defined/overridden for host~~ (Wdrożono używając modeli Pydantic)
 4. ~~Move host configs to .yaml~~
-5. Add options for different sorting of message output
+5. ~~Add options for different sorting of message output~~ (Zrobione: dodano konfigurowalny `output_format` - compact, iso8601, json)
 6. ~~Add (critical) regex based error message filters triggering actions~~ (Wdrożono filtrowanie lokalne/klienckie po regexach)
 7. ~~Find how to be able to use `tail -f`, maybe extend Paramiko/Fabric~~ (Zmigrowano do `asyncssh` i ciągłego strumieniowania `tail -F`)
 8. Serve it as a page from secure host with mini web server (w SSL)

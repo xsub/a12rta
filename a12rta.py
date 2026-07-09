@@ -10,6 +10,7 @@ import logging
 import signal
 import yaml
 import re
+import json
 from pydantic import BaseModel, ValidationError, field_validator
 from typing import List, Optional
 
@@ -24,6 +25,7 @@ class HostConfig(BaseModel):
     buffer_lines: int = 10
     root_access_type: str = "sudo"
     filters: Optional[List[str]] = None
+    output_format: str = "compact"  # Options: compact, iso8601, json
 
     @field_validator('log_files', mode='before')
     @classmethod
@@ -46,7 +48,7 @@ async def tail_file(host_config: HostConfig, log_file: str, conn: asyncssh.SSHCl
                 if regexes and not any(r.search(line) for r in regexes):
                     continue
 
-                await queue.put((host_config.host, log_file, line))
+                await queue.put((host_config, log_file, line))
 
     except asyncssh.Error as e:
         logging.error(f"[{host_config.host}] SSH read error on {log_file}: {e}")
@@ -76,7 +78,7 @@ async def tail_local_file(host_config: HostConfig, log_file: str, queue: asyncio
                 if regexes and not any(r.search(line) for r in regexes):
                     continue
 
-                await queue.put((host_config.host, log_file, line))
+                await queue.put((host_config, log_file, line))
                 
         except asyncio.CancelledError:
             if 'process' in locals():
@@ -144,9 +146,22 @@ async def host_worker(host_config: HostConfig, queue: asyncio.Queue):
 async def consumer(queue: asyncio.Queue):
     try:
         while True:
-            host, log_file, data = await queue.get()
+            host_config, log_file, data = await queue.get()
             dt = datetime.datetime.now()
-            print(f"@{dt:%Y-%m-%d %H:%M:%S} {host}:{log_file}:\n{data}\n-----", flush=True)
+            
+            if host_config.output_format == "json":
+                output = json.dumps({
+                    "timestamp": dt.isoformat(),
+                    "host": host_config.host,
+                    "file": log_file,
+                    "message": data
+                })
+                print(output, flush=True)
+            elif host_config.output_format == "iso8601":
+                print(f"[{dt.isoformat()}] {host_config.host} -> {log_file} | {data}", flush=True)
+            else: # compact default
+                print(f"@{dt:%Y-%m-%d %H:%M:%S} {host_config.host}:{log_file}:\n{data}\n-----", flush=True)
+                
             queue.task_done()
     except asyncio.CancelledError:
         pass
