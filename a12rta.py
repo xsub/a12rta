@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # A12RTA v2: AnotherOne 2 Rule Them All (Refactored)
-# Asynchroniczny monitor logów z auto-reconnectem, strumieniowaniem i multiplexingiem.
+# Asynchronous log monitor with auto-reconnect, streaming and multiplexing.
 
 import argparse
 import asyncio
@@ -32,7 +32,7 @@ class HostConfig(BaseModel):
 
 async def tail_file(host_config: HostConfig, log_file: str, conn: asyncssh.SSHClientConnection, queue: asyncio.Queue):
     cmd = f"{host_config.root_access_type} tail -n {host_config.buffer_lines} -F {log_file}"
-    logging.info(f"[{host_config.host}] Rozpoczynam nasłuch {log_file}")
+    logging.info(f"[{host_config.host}] Starting to tail {log_file}")
     
     regexes = [re.compile(f) for f in host_config.filters] if host_config.filters else []
 
@@ -49,14 +49,14 @@ async def tail_file(host_config: HostConfig, log_file: str, conn: asyncssh.SSHCl
                 await queue.put((host_config.host, log_file, line))
 
     except asyncssh.Error as e:
-        logging.error(f"[{host_config.host}] Błąd SSH odczytu {log_file}: {e}")
+        logging.error(f"[{host_config.host}] SSH read error on {log_file}: {e}")
     except Exception as e:
-        logging.error(f"[{host_config.host}] Nieoczekiwany błąd odczytu {log_file}: {e}")
+        logging.error(f"[{host_config.host}] Unexpected read error on {log_file}: {e}")
 
 
 async def tail_local_file(host_config: HostConfig, log_file: str, queue: asyncio.Queue):
     cmd = f"{host_config.root_access_type} tail -n {host_config.buffer_lines} -F {log_file}"
-    logging.info(f"[{host_config.host}] Rozpoczynam nasłuch lokalny {log_file}")
+    logging.info(f"[{host_config.host}] Starting to tail locally {log_file}")
     
     regexes = [re.compile(f) for f in host_config.filters] if host_config.filters else []
 
@@ -86,11 +86,11 @@ async def tail_local_file(host_config: HostConfig, log_file: str, queue: asyncio
                     pass
             break
         except Exception as e:
-            logging.error(f"[{host_config.host}] Błąd lokalnego odczytu {log_file}: {e}")
+            logging.error(f"[{host_config.host}] Local read error on {log_file}: {e}")
             await asyncio.sleep(5)
 
 async def local_worker(host_config: HostConfig, queue: asyncio.Queue):
-    msg = f"Inicjalizacja nasłuchu na localhost ({host_config.host})."
+    msg = f"Initializing localhost tailing ({host_config.host})."
     logging.info(msg)
     print(msg)
     
@@ -116,10 +116,10 @@ async def host_worker(host_config: HostConfig, queue: asyncio.Queue):
             if host_config.key_filename:
                 connect_kwargs["client_keys"] = [host_config.key_filename]
 
-            logging.info(f"[{host_config.host}] Łączenie...")
+            logging.info(f"[{host_config.host}] Connecting...")
             
             async with asyncssh.connect(**connect_kwargs) as conn:
-                msg = f"Połączono pomyślnie z {host_config.host}."
+                msg = f"Successfully connected to {host_config.host}."
                 logging.info(msg)
                 print(msg)
                 
@@ -131,13 +131,13 @@ async def host_worker(host_config: HostConfig, queue: asyncio.Queue):
                 await asyncio.gather(*tasks)
                 
         except asyncssh.Error as e:
-            msg = f"[{host_config.host}] Błąd połączenia/rozłączenie: {e}. Ponawiam za 10s..."
+            msg = f"[{host_config.host}] Connection error/disconnected: {e}. Retrying in 10s..."
             logging.error(msg)
-            print(f"BŁĄD: {msg}")
+            print(f"ERROR: {msg}")
         except asyncio.CancelledError:
             break
         except Exception as e:
-            logging.error(f"[{host_config.host}] Błąd: {e}")
+            logging.error(f"[{host_config.host}] Error: {e}")
         
         await asyncio.sleep(10)
 
@@ -156,7 +156,7 @@ async def main(filename: str):
         with open(filename) as f:
             raw_config = yaml.safe_load(f)
     except FileNotFoundError:
-        print(f"Brak pliku konfiguracyjnego {filename}")
+        print(f"Configuration file not found: {filename}")
         return
 
     hosts = []
@@ -167,11 +167,11 @@ async def main(filename: str):
         try:
             hosts.append(HostConfig(**item))
         except ValidationError as e:
-            print(f"Błąd konfiguracji dla hosta #{idx}:\n{e}")
+            print(f"Configuration error for host #{idx}:\n{e}")
             continue
 
     if not hosts:
-        print("Brak poprawnej konfiguracji hostów. Kończenie pracy.")
+        print("No valid host configuration found. Exiting.")
         return
 
     queue = asyncio.Queue()
@@ -186,7 +186,7 @@ async def main(filename: str):
     try:
         await asyncio.gather(*workers)
     except asyncio.CancelledError:
-        print("\nPrzerwano pętlę główną. Oczekiwanie na czyste zamknięcie...")
+        print("\nMain loop interrupted. Waiting for graceful shutdown...")
     finally:
         for w in workers:
             w.cancel()
@@ -195,7 +195,7 @@ async def main(filename: str):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument('-f', '--filename', type=str, default='hosts.yml', help='Plik YAML z konfiguracją.')
+    parser.add_argument('-f', '--filename', type=str, default='hosts.yml', help='YAML file containing host configurations.')
     args = parser.parse_args()
 
     loop = asyncio.new_event_loop()
@@ -203,7 +203,7 @@ if __name__ == '__main__':
     main_task = loop.create_task(main(args.filename))
     
     def shutdown_handler():
-        print("Otrzymano sygnał zamknięcia (Ctrl+C). Wyłączanie...")
+        print("Shutdown signal received (Ctrl+C). Shutting down...")
         main_task.cancel()
 
     for sig in (signal.SIGINT, signal.SIGTERM):
@@ -215,6 +215,6 @@ if __name__ == '__main__':
     try:
         loop.run_until_complete(main_task)
     except asyncio.CancelledError:
-        print("Pomyślnie zamknięto.")
+        print("Successfully shut down.")
     finally:
         loop.close()
