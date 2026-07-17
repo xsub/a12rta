@@ -10,6 +10,8 @@ import logging
 import signal
 import yaml
 import re
+import os
+from pathlib import Path
 import json
 from pydantic import BaseModel, ValidationError, field_validator
 from typing import List, Optional
@@ -32,64 +34,131 @@ class HostConfig(BaseModel):
     def parse_log_files(cls, v):
         return [v] if isinstance(v, str) else v
 
+READ_CHUNK = 4 * 1024 * 1024
+
 async def tail_file(host_config: HostConfig, log_file: str, conn: asyncssh.SSHClientConnection, queue: asyncio.Queue):
-    cmd = f"{host_config.root_access_type} tail -n {host_config.buffer_lines} -F {log_file}"
-    logging.info(f"[{host_config.host}] Starting to tail {log_file}")
-    
+    logging.info(f"[{host_config.host}] Starting to poll {log_file}")
     regexes = [re.compile(f) for f in host_config.filters] if host_config.filters else []
 
-    try:
-        async with conn.create_process(cmd) as process:
-            async for line in process.stdout:
-                line = line.strip()
-                if not line:
-                    continue
-                
-                if regexes and not any(r.search(line) for r in regexes):
-                    continue
-
-                await queue.put((host_config, log_file, line))
-
-    except asyncssh.Error as e:
-        logging.error(f"[{host_config.host}] SSH read error on {log_file}: {e}")
-    except Exception as e:
-        logging.error(f"[{host_config.host}] Unexpected read error on {log_file}: {e}")
-
-
-async def tail_local_file(host_config: HostConfig, log_file: str, queue: asyncio.Queue):
-    cmd = f"{host_config.root_access_type} tail -n {host_config.buffer_lines} -F {log_file}"
-    logging.info(f"[{host_config.host}] Starting to tail locally {log_file}")
-    
-    regexes = [re.compile(f) for f in host_config.filters] if host_config.filters else []
+    offset = None
 
     while True:
         try:
-            process = await asyncio.create_subprocess_shell(
-                cmd,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE
-            )
-            
-            async for line in process.stdout:
-                line = line.decode('utf-8', errors='replace').strip()
+            cmd_size = f"{host_config.root_access_type} sh -c 'wc -c < {log_file}'"
+            res_size = await conn.run(cmd_size, check=False)
+            if res_size.exit_status != 0:
+                await asyncio.sleep(1)
+                continue
+
+            try:
+                size = int(res_size.stdout.strip())
+            except ValueError:
+                await asyncio.sleep(1)
+                continue
+
+            if offset is None:
+                offset = size
+                await asyncio.sleep(1)
+                continue
+
+            if size < offset:
+                offset = 0
+            if size == offset:
+                await asyncio.sleep(1)
+                continue
+
+            cmd_data = f"{host_config.root_access_type} sh -c 'tail -c +{offset + 1} {log_file} | head -c {READ_CHUNK}'"
+            res_data = await conn.run(cmd_data, encoding=None, check=False)
+
+            if res_data.exit_status != 0 and not res_data.stdout:
+                await asyncio.sleep(1)
+                continue
+
+            data = res_data.stdout
+            if not data:
+                await asyncio.sleep(1)
+                continue
+
+            nl = data.rfind(b'\n')
+            if nl < 0:
+                await asyncio.sleep(1)
+                continue
+
+            lines_data = data[:nl].decode('utf-8', errors='replace')
+            offset = offset + nl + 1
+
+            for line in lines_data.splitlines():
+                line = line.strip()
                 if not line:
                     continue
-                
                 if regexes and not any(r.search(line) for r in regexes):
                     continue
+                await queue.put((host_config, log_file, line))
 
+        except asyncio.CancelledError:
+            break
+        except asyncssh.Error as e:
+            logging.error(f"[{host_config.host}] SSH read error on {log_file}: {e}")
+            raise
+        except Exception as e:
+            logging.error(f"[{host_config.host}] Unexpected read error on {log_file}: {e}")
+
+        await asyncio.sleep(1)
+
+async def tail_local_file(host_config: HostConfig, log_file: str, queue: asyncio.Queue):
+    logging.info(f"[{host_config.host}] Starting to poll locally {log_file}")
+    
+    regexes = [re.compile(f) for f in host_config.filters] if host_config.filters else []
+
+    offset = None
+    p = Path(log_file)
+
+    while True:
+        try:
+            if not p.exists():
+                await asyncio.sleep(1)
+                continue
+
+            size = p.stat().st_size
+
+            if offset is None:
+                offset = size
+                await asyncio.sleep(1)
+                continue
+
+            if size < offset:
+                offset = 0
+            if size == offset:
+                await asyncio.sleep(1)
+                continue
+
+            with p.open("rb") as fh:
+                fh.seek(offset)
+                data = fh.read(READ_CHUNK)
+                
+            nl = data.rfind(b'\n')
+            if nl < 0:
+                await asyncio.sleep(1)
+                continue
+
+            lines_data = data[:nl].decode('utf-8', errors='replace')
+            offset = offset + nl + 1
+
+            for line in lines_data.splitlines():
+                line = line.strip()
+                if not line:
+                    continue
+                if regexes and not any(r.search(line) for r in regexes):
+                    continue
                 await queue.put((host_config, log_file, line))
                 
         except asyncio.CancelledError:
-            if 'process' in locals():
-                try:
-                    process.terminate()
-                except:
-                    pass
             break
         except Exception as e:
             logging.error(f"[{host_config.host}] Local read error on {log_file}: {e}")
             await asyncio.sleep(5)
+
+        await asyncio.sleep(1)
 
 async def local_worker(host_config: HostConfig, queue: asyncio.Queue):
     msg = f"Initializing localhost tailing ({host_config.host})."
