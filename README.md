@@ -22,14 +22,14 @@ graph TD;
     Dispatcher -->|Spawns| RemoteWorker1(Remote Worker: Host A)
     Dispatcher -->|Spawns| RemoteWorker2(Remote Worker: Host B)
     
-    LocalWorker -->|Python IO Seek| LocalLog[/var/log/system.log]
+    LocalWorker -->|Python IO Seek| LocalLog["/var/log/system.log"]
     
     RemoteWorker1 -->|Single SSH Conn| NodeA(Host A)
-    NodeA -->|Offset Polling| LogA1[/var/log/nginx/access.log]
-    NodeA -->|Offset Polling| LogA2[/var/log/nginx/error.log]
+    NodeA -->|Offset Polling| LogA1["/var/log/nginx/access.log"]
+    NodeA -->|Offset Polling| LogA2["/var/log/nginx/error.log"]
     
     RemoteWorker2 -->|Single SSH Conn| NodeB(Host B)
-    NodeB -->|Offset Polling| LogB1[/var/log/syslog]
+    NodeB -->|Offset Polling| LogB1["/var/log/syslog"]
 
     LocalWorker -.-> |Async Queue| ConsumerQueue((Message Queue))
     RemoteWorker1 -.-> |Async Queue| ConsumerQueue
