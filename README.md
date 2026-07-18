@@ -3,6 +3,42 @@
 
 ##### 🔥 Now features graceful shutdown on SIGINT (Ctrl+C)! :accessibility: 😸
 
+### How it Works
+
+A12RTA uses a fully asynchronous producer-consumer architecture, implemented via Python's `asyncio` and the `asyncssh` library. The tool is designed to monitor files efficiently, with features built for scalability and fault tolerance:
+
+*   **Byte-Offset Polling Mechanism**: Instead of keeping expensive subprocesses like `tail -F` running continuously, a12rta tracks the exact byte position (offset) of the end of each log file. During each tick, it jumps to this offset and reads up to 4MB of new data using chunk reading.
+*   **Multiplexing**: For remote hosts, only **one** SSH connection is made per server. All multiple monitored logs from the same host are polled asynchronously inside this single session, drastically reducing network and CPU overhead.
+*   **Safe Chunking**: It ensures logs are never truncated. The reader stops strictly at the last full newline character (`\n`), deferring any partial lines to the next polling cycle.
+
+#### Architecture Diagram
+
+```mermaid
+graph TD;
+    subyaml[(hosts.yml)] --> ConfigValidator(Pydantic Configuration)
+    ConfigValidator --> Dispatcher(Dispatcher)
+    
+    Dispatcher -->|Spawns| LocalWorker(Local Worker)
+    Dispatcher -->|Spawns| RemoteWorker1(Remote Worker: Host A)
+    Dispatcher -->|Spawns| RemoteWorker2(Remote Worker: Host B)
+    
+    LocalWorker -->|Python IO Seek| LocalLog[/var/log/system.log]
+    
+    RemoteWorker1 -->|Single SSH Conn| NodeA(Host A)
+    NodeA -->|Offset Polling| LogA1[/var/log/nginx/access.log]
+    NodeA -->|Offset Polling| LogA2[/var/log/nginx/error.log]
+    
+    RemoteWorker2 -->|Single SSH Conn| NodeB(Host B)
+    NodeB -->|Offset Polling| LogB1[/var/log/syslog]
+
+    LocalWorker -.-> |Async Queue| ConsumerQueue((Message Queue))
+    RemoteWorker1 -.-> |Async Queue| ConsumerQueue
+    RemoteWorker2 -.-> |Async Queue| ConsumerQueue
+    
+    ConsumerQueue --> Formatter(Output Formatter)
+    Formatter --> |Compact / ISO8601 / JSON| STDOUT>Standard Output]
+```
+
 ### Example run:
 
 ```shell 
@@ -77,14 +113,14 @@ Main coroutine cancelled. Stopping the event loop.
 
 ### TODOs:
 
-0. ~~Handle Exceptions like "Host is down" & shorter timeouts for ssh~~ (Dodano auto-reconnect)
-1. ~~Extend number of monitored log files to arbitrary number per host~~ (Wdrożono multiplexing przez listę w konfiguracji)
-2. ~~Add support for localhost (non-ssh)~~ (Zrobione: dodano strumieniowanie podprocesami dla `localhost` i flagę `is_localhost`)
-3. ~~Use default values if not defined/overridden for host~~ (Wdrożono używając modeli Pydantic)
+0. ~~Handle Exceptions like "Host is down" & shorter timeouts for ssh~~ (Added async auto-reconnect logic)
+1. ~~Extend number of monitored log files to arbitrary number per host~~ (Implemented multiplexing over single SSH connection)
+2. ~~Add support for localhost (non-ssh)~~ (Implemented local streaming bypassing SSH entirely)
+3. ~~Use default values if not defined/overridden for host~~ (Implemented using Pydantic models)
 4. ~~Move host configs to .yaml~~
-5. ~~Add options for different sorting of message output~~ (Zrobione: dodano konfigurowalny `output_format` - compact, iso8601, json)
-6. ~~Add (critical) regex based error message filters triggering actions~~ (Wdrożono filtrowanie lokalne/klienckie po regexach)
-7. ~~Find how to be able to use `tail -f`, maybe extend Paramiko/Fabric~~ (Zmigrowano do `asyncssh` i ciągłego strumieniowania `tail -F`)
+5. ~~Add options for different sorting of message output~~ (Added `output_format` with compact, iso8601, json support)
+6. ~~Add (critical) regex based error message filters triggering actions~~ (Implemented Regex client-side filtering)
+7. ~~Find how to be able to use `tail -f`, maybe extend Paramiko/Fabric~~ (Migrated to `asyncssh` with advanced byte-offset polling)
 8. Serve it as a page from secure host with mini web server (w SSL)
 9. How to change password less sudo to more strict sudoers.d policy
 10. ~~Update the license to be permissive.~~
