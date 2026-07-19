@@ -18,6 +18,7 @@ The current implementation focuses on low process overhead, predictable output, 
 - Basic log truncation/rotation handling by resetting offsets
 - Optional client-side regex filters
 - Output formats: `compact`, `iso8601`, and `json`
+- Backward-compatible `log_file` input for single-file host entries
 - YAML configuration validated with Pydantic
 - Graceful shutdown on `Ctrl+C` / `SIGTERM`
 - Pytest-based CI on Python 3.11
@@ -27,24 +28,41 @@ The current implementation focuses on low process overhead, predictable output, 
 ```mermaid
 graph TD;
     ConfigFile[("hosts.yml")] --> ConfigValidator["Pydantic Configuration"]
+    ConfigValidator --> Defaults["Defaults: sudo, compact output, buffer_lines 10"]
     ConfigValidator --> Dispatcher["Dispatcher"]
 
-    Dispatcher --> LocalWorker["Local Worker"]
-    Dispatcher --> RemoteWorkerA["Remote Worker: Host A"]
-    Dispatcher --> RemoteWorkerB["Remote Worker: Host B"]
+    Dispatcher --> RemoteWorkerA["Remote Worker: Host_A"]
+    Dispatcher --> RemoteWorkerB["Remote Worker: Host_B"]
+    Dispatcher --> LocalWorker["Local Worker: localhost"]
 
-    LocalWorker --> LocalLog["/var/log/system.log"]
-
+    RemoteWorkerA --> AAuth["user + key_filename"]
+    RemoteWorkerA --> ARoot["root_access_type: sudo"]
+    RemoteWorkerA --> AFormat["output_format: json"]
+    RemoteWorkerA --> AFilters["filters: ERROR, CRITICAL, 404"]
     RemoteWorkerA --> SSHA["Single SSH Connection"]
+
     SSHA --> LogA1["/var/log/nginx/access.log"]
     SSHA --> LogA2["/var/log/nginx/error.log"]
 
+    RemoteWorkerB --> BAuth["user + key_filename"]
+    RemoteWorkerB --> BRoot["root_access_type: doas"]
+    RemoteWorkerB --> BCompat["legacy log_file input"]
+    RemoteWorkerB --> BFormat["output_format: iso8601"]
     RemoteWorkerB --> SSHB["Single SSH Connection"]
+
     SSHB --> LogB1["/var/log/syslog"]
 
-    LocalWorker -.-> Queue(("Async Queue"))
-    RemoteWorkerA -.-> Queue
-    RemoteWorkerB -.-> Queue
+    LocalWorker --> LMode["is_localhost: true"]
+    LocalWorker --> LFormat["output_format: compact"]
+    LocalWorker --> LFilters["local filters"]
+    LocalWorker --> LocalLog1["/var/log/system.log"]
+    LocalWorker --> LocalLog2["/var/log/install.log"]
+
+    LogA1 -.-> Queue(("Async Queue"))
+    LogA2 -.-> Queue
+    LogB1 -.-> Queue
+    LocalLog1 -.-> Queue
+    LocalLog2 -.-> Queue
 
     Queue --> Formatter["Output Formatter"]
     Formatter --> Stdout["Standard Output"]
@@ -58,6 +76,7 @@ graph TD;
 - host: Host_A
   user: almalinux
   key_filename: ~/.ssh/id_rsa
+  buffer_lines: 20
   root_access_type: sudo
   log_files:
     - /var/log/nginx/access.log
@@ -68,10 +87,26 @@ graph TD;
     - "404"
   output_format: json
 
+- host: Host_B
+  user: pablo
+  key_filename: ~/.ssh/id_ed25519
+  buffer_lines: 10
+  root_access_type: doas
+  log_file: /var/log/syslog
+  filters:
+    - "sshd"
+    - "failed|error"
+  output_format: iso8601
+
 - host: localhost
   is_localhost: true
+  buffer_lines: 5
   log_files:
     - /var/log/system.log
+    - /var/log/install.log
+  filters:
+    - "kernel"
+    - "panic|error"
   output_format: compact
 ```
 
@@ -86,6 +121,8 @@ graph TD;
 | `is_localhost` | no | Forces local file polling without SSH. |
 | `key_filename` | no | SSH private key path used by `asyncssh`. |
 | `log_files` | yes | List of files to monitor. |
+| `log_file` | no | Backward-compatible single-file form converted internally to `log_files`. |
+| `buffer_lines` | no | Accepted configuration field with default `10`; retained for compatibility with earlier buffered-tail behavior. |
 | `root_access_type` | no | Prefix used for remote read commands, usually `sudo` or `doas`. Defaults to `sudo`. |
 | `filters` | no | List of regex patterns; matching lines are emitted. |
 | `output_format` | no | One of `compact`, `iso8601`, or `json`. Defaults to `compact`. |
