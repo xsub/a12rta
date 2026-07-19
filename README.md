@@ -3,18 +3,22 @@
 [![CI Status](https://github.com/xsub/a12rta/actions/workflows/ci.yml/badge.svg)](https://github.com/xsub/a12rta/actions/workflows/ci.yml)
 [![Python Version](https://img.shields.io/badge/python-3.11%2B-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
-#### An asynchronous, Python-based log monitoring tool for multiple remote machines, utilizing asyncio, asyncssh, and the producer-consumer pattern. 
 
-### How it Works
+A high-performance, asynchronous log monitoring utility for distributed infrastructure.
 
-A12RTA uses a fully asynchronous producer-consumer architecture, implemented via Python's `asyncio` and the `asyncssh` library. The tool is designed to monitor files efficiently, with features built for scalability and fault tolerance:
+a12rta leverages a disciplined producer-consumer architecture to monitor local and remote logs without the process overhead of standard shell utilities. By using byte-offset polling over persistent SSH connections, it is designed for production environments where resource conservation and reliability are paramount.
 
-*   **Byte-Offset Polling Mechanism**: Instead of keeping expensive subprocesses like `tail -F` running continuously, a12rta tracks the exact byte position (offset) of the end of each log file. During each tick, it jumps to this offset and reads up to 4MB of new data using chunk reading.
-*   **Multiplexing**: For remote hosts, only **one** SSH connection is made per server. All multiple monitored logs from the same host are polled asynchronously inside this single session, drastically reducing network and CPU overhead.
-*   **Safe Chunking**: It ensures logs are never truncated. The reader stops strictly at the last full newline character (`\n`), deferring any partial lines to the next polling cycle.
+### 🔥 Latest Update: Graceful Shutdown
+a12rta now supports clean exit sequences. Press `Ctrl+C` to trigger a graceful shutdown—the main event loop cancels pending coroutines and closes SSH connections cleanly, ensuring no orphaned handles remain on your production nodes.
 
-#### Architecture Diagram
+### Core Engineering Highlights
+*   **Byte-Offset Polling Mechanism**: Instead of spawning expensive sub-processes (like `tail -f`), a12rta tracks the byte-offset of monitored files. It efficiently seeks to the end of the file and reads chunks, eliminating the process explosion common in monitoring tools.
+*   **SSH Multiplexing**: Designed for massive scale; a single SSH connection serves as the transport for all monitored logs on a specific host. This significantly lowers CPU and network overhead.
+*   **Safe Chunking**: The reader stops strictly at the last full newline (`\n`), ensuring you never receive truncated, incomplete log lines.
+*   **Resilient Concurrency**: Built on `asyncio` and `asyncssh`, supporting auto-reconnect logic to recover from network jitters or remote node outages.
+*   **Client-Side Filtering**: Integrated Regex-based error message filtering allows for immediate actionable alerts without server-side config changes.
 
+### Architecture Overview
 ```mermaid
 graph TD;
     subyaml[(hosts.yml)] --> ConfigValidator(Pydantic Configuration)
@@ -41,71 +45,37 @@ graph TD;
     Formatter --> |Compact / ISO8601 / JSON| STDOUT>Standard Output]
 ```
 
-### Example run:
+### Project Milestones
 
-```shell 
-Connected to Host_A.
-Failed to connect to Host_B: timed out
-Connected to Host_C.
-ERROR: Error executing command on host Host_C: Encountered a bad command exit code!
-@2023-08-16 00:52:08.891383 Host_A:/var/log/nginx/access.log-20230622:
-ANONYMIZED_IP - - [15/Aug/2023:21:21:21 +0000] "GET / HTTP/1.1" 200 19248 "-" "UserAgent123" "-"
------
-@2023-08-16 00:52:08.891456 Host_A:/var/log/nginx/access.log-20230622:
-ANONYMIZED_IP - - [15/Aug/2023:21:21:22 +0000] "GET /images/logo.png HTTP/1.1" 200 22916 "-" "UserAgent123" "-"
------
-@2023-08-16 00:52:08.891477 Host_A:/var/log/nginx/access.log-20230622:
-ANONYMIZED_IP - - [15/Aug/2023:21:22:16 +0000] "GET / HTTP/1.1" 404 548 "-" "UserAgent456" "-"
------
-@2023-08-16 00:52:08.891495 Host_A:/var/log/nginx/access.log-20230622:
-ANONYMIZED_IP - - [15/Aug/2023:21:42:05 +0000] "GET / HTTP/1.1" 404 146 "-" "UserAgent789" "-"
------
-@2023-08-16 00:52:08.891511 Host_A:/var/log/nginx/access.log-20230622:
-ANONYMIZED_IP - - [15/Aug/2023:21:42:06 +0000] "PRI * HTTP/2.0" 400 150 "-" "-" "-"
------
-@2023-08-16 00:52:08.891527 Host_A:/var/log/nginx/access.log-20230622:
-ANONYMIZED_IP - - [15/Aug/2023:21:56:22 +0000] "GET /owa/auth/x.js HTTP/1.1" 404 5780 "-" "UserAgentFinal1" "-"
------
-@2023-08-16 00:52:08.891543 Host_A:/var/log/nginx/access.log-20230622:
-ANONYMIZED_IP - - [15/Aug/2023:22:09:59 +0000] "GET /webclient/ HTTP/1.1" 404 5780 "-" "UserAgentFinal2" "-"
------
-@2023-08-16 00:52:08.891560 Host_A:/var/log/nginx/access.log-20230622:
-ANONYMIZED_IP - - [15/Aug/2023:22:12:52 +0000] "GET / HTTP/1.1" 404 548 "-" "UserAgent789" "-"
------
-@2023-08-16 00:52:08.891577 Host_A:/var/log/nginx/access.log-20230622:
-ANONYMIZED_IP - - [15/Aug/2023:22:29:42 +0000] "\x03\x00\x00\x13\x0E\xE0\x00\x00\x00\x00\x00\x01\x00\x08\x00\x02\x00\x00\x00" 400 150 "-" "-" "-"
------
-@2023-08-16 00:52:08.891593 Host_A:/var/log/nginx/access.log-20230622:
-ANONYMIZED_IP - - [15/Aug/2023:22:47:36 +0000] "GET / HTTP/1.1" 404 146 "-" "UserAgentFinal3" "-"
------
-Ctrl+C received. Shutting down.
-Main coroutine cancelled. Stopping the event loop.
-```
+| Status | Feature | Implementation Detail |
+| :---: | :--- | :--- |
+| ✅ | Resilience | Async auto-reconnect logic for stable SSH pools. |
+| ✅ | Multiplexing | Arbitrary number of logs monitored over one SSH connection. |
+| ✅ | Local Mode | Native file streaming, bypassing SSH entirely for localhost. |
+| ✅ | Configuration | Pydantic-based validation with sensible defaults. |
+| ✅ | Output | Support for Compact, ISO8601, and JSON output formats. |
+| ✅ | Filtering | Client-side Regex error message filtering. |
+| ✅ | Optimization | Byte-offset polling using asyncssh. |
+| ✅ | Licensing | Permissive licensing for open-source adoption. |
 
-### Example config file:
+### Roadmap (TODOs)
+*   [ ] **Web Interface**: Serve logs via a secured (TLS/SSL) mini-web-server for browser-based monitoring.
+*   [ ] **Security hardening**: Transition from password-less sudo to strict sudoers.d policies.
 
+### Configuration Example (hosts.yml)
 ```yaml
 - host: Host_A
   user: almalinux
-  key_filename: /Users/pawelsuchanecki/.ssh/id_rsa
+  key_filename: ~/.ssh/id_rsa
   login_timeout: 5
-  log_file: /var/log/nginx/access.log-20230622
+  log_file: /var/log/nginx/access.log
   delay: 5
   buffer_lines: 10
   root_access_type: sudo
 
-- host: Host_B
-  user: pablo
-  key_filename: /Users/pawelsuchanecki/.ssh/id_rsa
-  login_timeout: 3 
-  log_file: /var/log/syslog
-  delay: 60
-  buffer_lines: 5
-  root_access_type: sudo
-
 - host: Host_C 
   user: pawel 
-  key_filename: /Users/pawelsuchanecki/.ssh/id_rsa
+  key_filename: ~/.ssh/id_rsa
   login_timeout: 8 
   log_file: /var/log/authlog
   delay: 60
@@ -113,16 +83,17 @@ Main coroutine cancelled. Stopping the event loop.
   root_access_type: doas
 ```
 
-### TODOs:
+### Sample Output
+```shell
+Connected to Host_A.
+Connected to Host_C.
 
-0. ~~Handle Exceptions like "Host is down" & shorter timeouts for ssh~~ (Added async auto-reconnect logic)
-1. ~~Extend number of monitored log files to arbitrary number per host~~ (Implemented multiplexing over single SSH connection)
-2. ~~Add support for localhost (non-ssh)~~ (Implemented local streaming bypassing SSH entirely)
-3. ~~Use default values if not defined/overridden for host~~ (Implemented using Pydantic models)
-4. ~~Move host configs to .yaml~~
-5. ~~Add options for different sorting of message output~~ (Added `output_format` with compact, iso8601, json support)
-6. ~~Add (critical) regex based error message filters triggering actions~~ (Implemented Regex client-side filtering)
-7. ~~Find how to be able to use `tail -f`, maybe extend Paramiko/Fabric~~ (Migrated to `asyncssh` with advanced byte-offset polling)
-8. Serve it as a page from secure host with mini web server (w SSL)
-9. How to change password less sudo to more strict sudoers.d policy
-10. ~~Update the license to be permissive.~~
+@2023-08-16 00:52:08.891383 Host_A:/var/log/nginx/access.log:
+ANONYMIZED_IP - - [15/Aug/2023:21:21:21 +0000] "GET / HTTP/1.1" 200 19248 "-" "UserAgent123" "-"
+-----
+@2023-08-16 00:52:08.891527 Host_A:/var/log/nginx/access.log:
+ANONYMIZED_IP - - [15/Aug/2023:21:56:22 +0000] "GET /owa/auth/x.js HTTP/1.1" 404 5780 "-" "UserAgentFinal1" "-"
+-----
+Ctrl+C received. Shutting down.
+Main coroutine cancelled. Stopping the event loop.
+```
