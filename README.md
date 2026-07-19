@@ -1,7 +1,5 @@
 # a12rta - Another One to Rule Them All
-#### An asynchronous, Python-based log monitoring tool for multiple remote machines, utilizing asyncio, fabric, and the producer-consumer pattern. 
-
-##### 🔥 Now features graceful shutdown on SIGINT (Ctrl+C)! :accessibility: 😸
+#### An asynchronous, Python-based log monitoring tool for multiple remote machines, utilizing asyncio, asyncssh, and the producer-consumer pattern. 
 
 ### How it Works
 
