@@ -4,93 +4,160 @@
 [![Python Version](https://img.shields.io/badge/python-3.11%2B-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
 
-A high-performance, asynchronous log monitoring utility for distributed infrastructure.
+`a12rta` is a small asynchronous log monitoring utility for watching local and remote log files from one process.
 
-a12rta leverages a disciplined producer-consumer architecture to monitor local and remote logs without the process overhead of standard shell utilities. By using byte-offset polling over persistent SSH connections, it is designed for production environments where resource conservation and reliability are paramount.
+It uses byte-offset polling instead of spawning long-lived `tail -f` subprocesses. Remote logs are read over persistent `asyncssh` connections, with one SSH connection per host and multiple monitored files per connection. Local logs are read through native Python file I/O using the same offset-based model.
 
-### Core Engineering Highlights
-*   **Byte-Offset Polling Mechanism**: Instead of spawning expensive sub-processes (like `tail -f`), a12rta tracks the byte-offset of monitored files. It efficiently seeks to the end of the file and reads chunks, eliminating the process explosion common in monitoring tools.
-*   **SSH Multiplexing**: Designed for massive scale; a single SSH connection serves as the transport for all monitored logs on a specific host. This significantly lowers CPU and network overhead.
-*   **Safe Chunking**: The reader stops strictly at the last full newline (`\n`), ensuring you never receive truncated, incomplete log lines.
-*   **Resilient Concurrency**: Built on `asyncio` and `asyncssh`, supporting auto-reconnect logic to recover from network jitters or remote node outages.
-*   **Client-Side Filtering**: Integrated Regex-based error message filtering allows for immediate actionable alerts without server-side config changes.
+The current implementation focuses on low process overhead, predictable output, simple YAML configuration, regex-based client-side filtering, and graceful shutdown behavior.
 
-### Architecture Overview
+## Features
+
+- Asynchronous local and remote log polling
+- One SSH connection per remote host, with multiple log files per host
+- Byte-offset tracking with reads emitted only at newline boundaries
+- Basic log truncation/rotation handling by resetting offsets
+- Optional client-side regex filters
+- Output formats: `compact`, `iso8601`, and `json`
+- YAML configuration validated with Pydantic
+- Graceful shutdown on `Ctrl+C` / `SIGTERM`
+- Pytest-based CI on Python 3.11
+
+## Architecture
+
 ```mermaid
 graph TD;
-    subyaml[(hosts.yml)] --> ConfigValidator(Pydantic Configuration)
-    ConfigValidator --> Dispatcher(Dispatcher)
-    
-    Dispatcher -->|Spawns| LocalWorker(Local Worker)
-    Dispatcher -->|Spawns| RemoteWorker1(Remote Worker: Host A)
-    Dispatcher -->|Spawns| RemoteWorker2(Remote Worker: Host B)
-    
-    LocalWorker -->|Python IO Seek| LocalLog["/var/log/system.log"]
-    
-    RemoteWorker1 -->|Single SSH Conn| NodeA(Host A)
-    NodeA -->|Offset Polling| LogA1["/var/log/nginx/access.log"]
-    NodeA -->|Offset Polling| LogA2["/var/log/nginx/error.log"]
-    
-    RemoteWorker2 -->|Single SSH Conn| NodeB(Host B)
-    NodeB -->|Offset Polling| LogB1["/var/log/syslog"]
+    ConfigFile[("hosts.yml")] --> ConfigValidator["Pydantic Configuration"]
+    ConfigValidator --> Dispatcher["Dispatcher"]
 
-    LocalWorker -.-> |Async Queue| ConsumerQueue((Message Queue))
-    RemoteWorker1 -.-> |Async Queue| ConsumerQueue
-    RemoteWorker2 -.-> |Async Queue| ConsumerQueue
-    
-    ConsumerQueue --> Formatter(Output Formatter)
-    Formatter --> |Compact / ISO8601 / JSON| STDOUT>Standard Output]
+    Dispatcher --> LocalWorker["Local Worker"]
+    Dispatcher --> RemoteWorkerA["Remote Worker: Host A"]
+    Dispatcher --> RemoteWorkerB["Remote Worker: Host B"]
+
+    LocalWorker --> LocalLog["/var/log/system.log"]
+
+    RemoteWorkerA --> SSHA["Single SSH Connection"]
+    SSHA --> LogA1["/var/log/nginx/access.log"]
+    SSHA --> LogA2["/var/log/nginx/error.log"]
+
+    RemoteWorkerB --> SSHB["Single SSH Connection"]
+    SSHB --> LogB1["/var/log/syslog"]
+
+    LocalWorker -.-> Queue(("Async Queue"))
+    RemoteWorkerA -.-> Queue
+    RemoteWorkerB -.-> Queue
+
+    Queue --> Formatter["Output Formatter"]
+    Formatter --> Stdout["Standard Output"]
 ```
 
-### Project Milestones
+## Configuration
 
-| Status | Feature | Implementation Detail |
-| :---: | :--- | :--- |
-| ✅ | Resilience | Async auto-reconnect logic for stable SSH pools. |
-| ✅ | Multiplexing | Arbitrary number of logs monitored over one SSH connection. |
-| ✅ | Local Mode | Native file streaming, bypassing SSH entirely for localhost. |
-| ✅ | Configuration | Pydantic-based validation with sensible defaults. |
-| ✅ | Output | Support for Compact, ISO8601, and JSON output formats. |
-| ✅ | Filtering | Client-side Regex error message filtering. |
-| ✅ | Optimization | Byte-offset polling using asyncssh. |
-| ✅ | Licensing | Permissive licensing for open-source adoption. |
+`hosts.yml` is a list of local or remote log sources.
 
-### Roadmap (TODOs)
-*   [ ] **Web Interface**: Serve logs via a secured (TLS/SSL) mini-web-server for browser-based monitoring.
-*   [ ] **Security hardening**: Transition from password-less sudo to strict sudoers.d policies.
-
-### Configuration Example (hosts.yml)
 ```yaml
 - host: Host_A
   user: almalinux
   key_filename: ~/.ssh/id_rsa
-  login_timeout: 5
-  log_file: /var/log/nginx/access.log
-  delay: 5
-  buffer_lines: 10
   root_access_type: sudo
+  log_files:
+    - /var/log/nginx/access.log
+    - /var/log/nginx/error.log
+  filters:
+    - "ERROR"
+    - "CRITICAL"
+    - "404"
+  output_format: json
 
-- host: Host_C 
-  user: pawel 
-  key_filename: ~/.ssh/id_rsa
-  login_timeout: 8 
-  log_file: /var/log/authlog
-  delay: 60
-  buffer_lines: 5
-  root_access_type: doas
+- host: localhost
+  is_localhost: true
+  log_files:
+    - /var/log/system.log
+  output_format: compact
 ```
 
-### Sample Output
-```shell
-Connected to Host_A.
-Connected to Host_C.
+`log_file` is accepted for backward compatibility and is converted internally to `log_files`, but new configuration should prefer the list form.
 
-@2023-08-16 00:52:08.891383 Host_A:/var/log/nginx/access.log:
-ANONYMIZED_IP - - [15/Aug/2023:21:21:21 +0000] "GET / HTTP/1.1" 200 19248 "-" "UserAgent123" "-"
------
-@2023-08-16 00:52:08.891527 Host_A:/var/log/nginx/access.log:
-ANONYMIZED_IP - - [15/Aug/2023:21:56:22 +0000] "GET /owa/auth/x.js HTTP/1.1" 404 5780 "-" "UserAgentFinal1" "-"
------
-Ctrl+C received. Shutting down.
-Main coroutine cancelled. Stopping the event loop.
+### Configuration Fields
+
+| Field | Required | Description |
+| :--- | :---: | :--- |
+| `host` | yes | Remote host name, IP address, or `localhost`. |
+| `user` | remote only | SSH username for remote hosts. |
+| `is_localhost` | no | Forces local file polling without SSH. |
+| `key_filename` | no | SSH private key path used by `asyncssh`. |
+| `log_files` | yes | List of files to monitor. |
+| `root_access_type` | no | Prefix used for remote read commands, usually `sudo` or `doas`. Defaults to `sudo`. |
+| `filters` | no | List of regex patterns; matching lines are emitted. |
+| `output_format` | no | One of `compact`, `iso8601`, or `json`. Defaults to `compact`. |
+
+## Usage
+
+Install runtime dependencies:
+
+```bash
+python3 -m pip install -r requirements.txt
 ```
+
+Run with the default configuration file:
+
+```bash
+python3 a12rta.py
+```
+
+Run with an explicit configuration file:
+
+```bash
+python3 a12rta.py -f hosts.yml
+```
+
+## Output
+
+Compact output:
+
+```text
+@2026-07-19 12:00:00 Host_A:/var/log/nginx/error.log:
+example log line
+-----
+```
+
+ISO-8601 output:
+
+```text
+[2026-07-19T12:00:00.000000] Host_A -> /var/log/nginx/error.log | example log line
+```
+
+JSON output:
+
+```json
+{"timestamp":"2026-07-19T12:00:00.000000","host":"Host_A","file":"/var/log/nginx/error.log","message":"example log line"}
+```
+
+## Implementation Notes
+
+- Remote workers keep one `asyncssh` connection open per host.
+- Each monitored file is polled by size and byte offset.
+- Reads are capped to a fixed chunk size and only complete newline-terminated data is emitted.
+- If a file shrinks, the offset is reset to handle truncation or rotation.
+- Regex filters run on the client side after a complete line is decoded.
+- The consumer owns formatting and writes records to standard output.
+
+## Development
+
+Install development dependencies:
+
+```bash
+python3 -m pip install -r requirements-dev.txt
+```
+
+Run the test suite:
+
+```bash
+python3 -m pytest -v
+```
+
+## Roadmap
+
+- Harden remote shell quoting and sudo/doas policy assumptions.
+- Add tests for remote polling, local polling, output formatting, and graceful shutdown.
+- Add packaging metadata for the current `asyncssh` and Pydantic-based implementation.
+- Consider a small authenticated web interface after the CLI behavior is stable.
