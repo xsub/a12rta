@@ -8,9 +8,6 @@ A high-performance, asynchronous log monitoring utility for distributed infrastr
 
 a12rta leverages a disciplined producer-consumer architecture to monitor local and remote logs without the process overhead of standard shell utilities. By using byte-offset polling over persistent SSH connections, it is designed for production environments where resource conservation and reliability are paramount.
 
-### 🔥 Latest Update: Graceful Shutdown
-a12rta now supports clean exit sequences. Press `Ctrl+C` to trigger a graceful shutdown—the main event loop cancels pending coroutines and closes SSH connections cleanly, ensuring no orphaned handles remain on your production nodes.
-
 ### Core Engineering Highlights
 *   **Byte-Offset Polling Mechanism**: Instead of spawning expensive sub-processes (like `tail -f`), a12rta tracks the byte-offset of monitored files. It efficiently seeks to the end of the file and reads chunks, eliminating the process explosion common in monitoring tools.
 *   **SSH Multiplexing**: Designed for massive scale; a single SSH connection serves as the transport for all monitored logs on a specific host. This significantly lowers CPU and network overhead.
